@@ -1,16 +1,27 @@
 import requests
+import os
+from dotenv import load_dotenv
 from bs4 import BeautifulSoup
 import time
 import csv
 import pandas as pd
 import argparse
 from requests.exceptions import RequestException, Timeout
+from ratelimit import limits, sleep_and_retry
 
+# Load environment variables from .env file in the same directory as the script
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # Constants
 BASE_URL = "https://bizfilings.vermont.gov"
 SEARCH_URL = f"{BASE_URL}/online/DatabrokerInquire/BusinessSearchList"
 DEFAULT_OUTPUT_FILE = "vermont_data_brokers.csv"
+
+# Rate limiting: 5 calls per second
+@sleep_and_retry
+@limits(calls=5, period=1)
+def rate_limited_request(url, headers, data):
+    return requests.post(url, headers=headers, data=data, timeout=30)
 
 def get_brokers_search_result(page_number, max_retries=3, retry_delay=1):
     payload = f"undefined&sortby=BusinessID&stype=a&pidx={page_number}"
@@ -29,7 +40,7 @@ def get_brokers_search_result(page_number, max_retries=3, retry_delay=1):
 
     for attempt in range(max_retries):
         try:
-            response = requests.post(SEARCH_URL, headers=headers, data=payload, timeout=30)
+            response = rate_limited_request(SEARCH_URL, headers, payload)
             response.raise_for_status()
             return response.text
         except (Timeout, RequestException) as e:
@@ -94,7 +105,6 @@ def fetch_all_pages():
         print(f"Found {len(brokers_data)} brokers on page {page_number}. Total brokers so far: {len(all_brokers_data)}")
         
         page_number += 1
-        time.sleep(1)
 
     print(f"Stopped at page {page_number - 1}")
     return all_brokers_data
@@ -106,7 +116,7 @@ def save_to_csv(data, filename):
               index=False, 
               quotechar='"', 
               quoting=csv.QUOTE_ALL,
-              line_terminator="\n")
+              lineterminator="\n")  # Changed from line_terminator to lineterminator
     print(f"Data saved to {filename}")
 
 def scrape(output_filename):
