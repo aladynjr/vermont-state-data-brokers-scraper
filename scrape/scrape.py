@@ -14,7 +14,7 @@ OUTPUT_DIRECTORY = '.'  # Current directory
 DEFAULT_OUTPUT_FILENAME = 'vermont_data_brokers'
 REQUEST_DELAY = 2  # Delay between requests in seconds
 
-async def initialize_session():
+def initialize_session():
     print("Initiating session and retrieving initial data...")
     url = "https://bizfilings.vermont.gov/online/DatabrokerInquire/DataBrokerSearch"
     headers = {
@@ -36,35 +36,33 @@ async def initialize_session():
 
     try:
         print("Sending initial request...")
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, data=payload) as response:
-                response.raise_for_status()
-                print("Initial request successful.")
-                
-                text = await response.text()
-                soup = BeautifulSoup(text, 'html.parser')
-                
-                token_element = soup.find('input', {'name': '__RequestVerificationToken', 'type': 'hidden'})
-                token = token_element['value'] if token_element else None
-                print(f"Token retrieved: {'Yes' if token else 'No'}")
-                
-                cookie = '; '.join([f"{k}={v}" for k, v in response.cookies.items() if 'incap_ses' not in k])
+        response = requests.post(url, headers=headers, data=payload)
+        response.raise_for_status()
+        print("Initial request successful.")
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        token_element = soup.find('input', {'name': '__RequestVerificationToken', 'type': 'hidden'})
+        token = token_element['value'] if token_element else None
+        print(f"Token retrieved: {'Yes' if token else 'No'}")
+        
+        cookie = '; '.join([f"{cookie.name}={cookie.value}" for cookie in response.cookies if 'incap_ses' not in cookie.name])
 
-                if not cookie:
-                    raise ValueError("No valid cookies found in the response")
-                print("Cookies retrieved successfully.")
+        if not cookie:
+            raise ValueError("No valid cookies found in the response")
+        print("Cookies retrieved successfully.")
 
-                pagination_info = soup.select_one('#pagination-digg > li.pageinfo')
-                total_pages = 1
-                if pagination_info:
-                    page_info = pagination_info.text.strip()
-                    total_pages = int(page_info.split('of')[1].split(',')[0].strip())
+        pagination_info = soup.select_one('#pagination-digg > li.pageinfo')
+        total_pages = 1
+        if pagination_info:
+            page_info = pagination_info.text.strip()
+            total_pages = int(page_info.split('of')[1].split(',')[0].strip())
 
-                print(f"Total pages found: {total_pages}")
+        print(f"Total pages found: {total_pages}")
 
         return cookie, token, total_pages
 
-    except aiohttp.ClientError as e:
+    except requests.exceptions.RequestException as e:
         raise RuntimeError(f"An error occurred during the initial request: {e}")
 
 async def fetch_broker_page(session, url, cookie, token, page):
@@ -196,7 +194,7 @@ def validate_broker_data(data):
 async def scrape(output_filename):
     try:
         print("Starting the Vermont Data Broker Scraper...")
-        cookie, token, total_pages = await initialize_session()
+        cookie, token, total_pages = initialize_session()
         print(f"Session data retrieved successfully.")
         print(f"Cookie: {cookie[:50]}..." if len(cookie) > 50 else f"Cookie: {cookie}")
         print(f"Token: {token[:50]}..." if token and len(token) > 50 else f"Token: {token}")
