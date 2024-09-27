@@ -6,13 +6,14 @@ import pandas as pd
 import csv
 import sys
 import requests
+import argparse
 
 
 # Constants
 MAX_CONCURRENT_REQUESTS = 5
 OUTPUT_DIRECTORY = '.'  # Current directory
-DEFAULT_OUTPUT_FILENAME = 'vermont_data_brokers'
 REQUEST_DELAY = 2  # Delay between requests in seconds
+DEFAULT_OUTPUT_PATH = os.path.join('data', 'vermont_data_brokers.csv')
 
 def initialize_session():
     print("Initiating session and retrieving initial data...")
@@ -191,7 +192,7 @@ def validate_broker_data(data):
     print("Data passed validation.")
     return True
 
-async def scrape(output_filename):
+async def scrape(output_path):
     try:
         print("Starting the Vermont Data Broker Scraper...")
         cookie, token, total_pages = initialize_session()
@@ -205,7 +206,8 @@ async def scrape(output_filename):
         print(f"Total brokers found: {len(all_brokers_data)}")
         
         if validate_broker_data(all_brokers_data):
-            output_path = os.path.join(OUTPUT_DIRECTORY, f"{output_filename}.csv")
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
             save_data_to_csv(all_brokers_data, output_path)
             
             print("\nSample of the first 5 brokers:")
@@ -218,9 +220,12 @@ async def scrape(output_filename):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def main():
+    parser = argparse.ArgumentParser(description="Vermont Data Broker Scraper")
+    parser.add_argument("-o", "--output", help="Path to save the output CSV file", default=DEFAULT_OUTPUT_PATH)
+    args = parser.parse_args()
+
+    asyncio.run(scrape(args.output))
+
 if __name__ == "__main__":
-    output_filename = DEFAULT_OUTPUT_FILENAME
-    if len(sys.argv) > 1:
-        output_filename = sys.argv[1]
-    
-    asyncio.run(scrape(output_filename))
+    main()
