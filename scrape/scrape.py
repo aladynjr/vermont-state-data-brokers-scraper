@@ -1,61 +1,135 @@
-import requests
-import os
-from dotenv import load_dotenv
+import asyncio
+import aiohttp
 from bs4 import BeautifulSoup
-import time
-import csv
+import os
 import pandas as pd
-import argparse
-from requests.exceptions import RequestException, Timeout
-from ratelimit import limits, sleep_and_retry
+import csv
+import sys
+import requests
 
-# Load environment variables from .env file in the same directory as the script
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 
 # Constants
-BASE_URL = "https://bizfilings.vermont.gov"
-SEARCH_URL = f"{BASE_URL}/online/DatabrokerInquire/BusinessSearchList"
-DEFAULT_OUTPUT_FILE = "vermont_data_brokers.csv"
+MAX_CONCURRENT_REQUESTS = 5
+OUTPUT_DIRECTORY = '.'  # Current directory
+DEFAULT_OUTPUT_FILENAME = 'vermont_data_brokers'
+REQUEST_DELAY = 2  # Delay between requests in seconds
 
-# Rate limiting: 5 calls per second
-@sleep_and_retry
-@limits(calls=5, period=1)
-def rate_limited_request(url, headers, data):
-    return requests.post(url, headers=headers, data=data, timeout=30)
-
-def get_brokers_search_result(page_number, max_retries=3, retry_delay=1):
-    payload = f"undefined&sortby=BusinessID&stype=a&pidx={page_number}"
+async def initialize_session():
+    print("Initiating session and retrieving initial data...")
+    url = "https://bizfilings.vermont.gov/online/DatabrokerInquire/DataBrokerSearch"
     headers = {
-'__requestverificationtoken': '79ELe5pCLmAFL5NzgeBZTSYS5Y-pT1vYGFLDHAPVQhvbmPfvZapEdXs3jvwlkHDtyHt7AUVfWWckaGYhwiWbItSDaBxfM6s8jXe9dlelbH9TpnzbsJBZuEZxpdjebfOC5_0CayYDCxpkoDj4YVJWmA2',
-  'cookie': 'ASP.NET_SessionId=fe2padw2pgk2s4eqlmgyngz1; __RequestVerificationToken=guH7fKHi-45NKBppGq1QygAveo4VSvkoUp6PCHCSlPI2egkpCeaOCJW1wMaVO9DI3jP_eYRZY__x-CozGirvh9UJua5i0RPDH2FPBWOQmls1HU2krAd_-gP4g9C5XcKqXKiX1GeU2U4Jk8XWUrSV2g2; ; incap_ses_1178_2276107=Z3r3UdmwW0ncLC1+5xhZENaM9WYAAAAAGpiNtuhuNT2JSv6dvSEe6w==; incap_ses_1246_2276107=L6G5Wa7sUCnuLomWja5KEXaY9WYAAAAAnnD0tbKU2WXW36yPpe68/Q==; incap_ses_1352_2276107=HbFtCt5XVAcPYu57+0TDEsyW9WYAAAAADSOerpfyzv6qYZgR2oiXtw==; incap_ses_1412_2276107=LOZKG+JidQsRNsEYqm6YE3uY9WYAAAAAsyle2XlReC6pWWIH/uyMwQ==; incap_ses_1427_2276107=BaswHjHQ1TGDJ/4aGLnNE6yW9WYAAAAAT7mYo5sjC1NkREboZamxRg==; incap_ses_1460_2276107=hvNAHmQh9j1c8smybfZCFJyM9WYAAAAAwGhZn139jfwUX7KhGiaYug==; incap_ses_1483_2276107=HeZsTteikF8iEXolzKyUFFeY9WYAAAAAj+KYRmRrDxwK8nJ0CwJCJA==; incap_ses_1599_2276107=5bRkElfHVSrX3wIhOMowFtGM9WYAAAAAP4FIHxpLZbb8RNgtSfT9hA==; incap_ses_1683_2276107=EwJAN3er0FAQBmo0uDdbF8SM9WYAAAAA8fJ9fzys5VG6JISZblggyQ==; incap_ses_173_2276107=HvWqB78/1kwNp6Wh3Z5mAmS19WYAAAAANhujD0pgKJFw4/xmP855Zw==; incap_ses_1835_2276107=6PEifUA1oSvyD/cL6jp3GaaM9WYAAAAA/RxzkHoWYHA4EUFCBILUKg==; incap_ses_1845_2276107=NlXNJ74rhAGof6bW3sGaGYeW9WYAAAAAdsehNUP5JDwW6t26J95Cgw==; incap_ses_2100_2276107=1ShOOcPwMhpzYvD2BLMkHbyM9WYAAAAATMuckGaDsaIiiPRb8YhMDQ==; incap_ses_2104_2276107=szV3dZ8OsF9stJY0BOkyHaOW9WYAAAAAgxfVr7sAeZjAC+Gghg5IWQ==; incap_ses_2105_2276107=fkAqFUiMBFKHN+DWgnY2HWOM9WYAAAAAtcuoRwUbFFTr/moXnWS72g==; incap_ses_225_2276107=/s5FKWQUUyIaRHXAeFwfA3iM9WYAAAAA/g6IINUmljsenEqZxpzbEQ==; incap_ses_232_2276107=sdawX141Ui/Wxzfu7Do4A2GY9WYAAAAAP0M1RaOaS8Wkm+R5WEbDNw==; incap_ses_326_2276107=DV/0IlAEQFaoml+6di+GBK6M9WYAAAAAyUi73AYZIhiD3axZxMcAxg==; incap_ses_480_2276107=YXDSFNTqN32DGWiHo02pBo6M9WYAAAAA8QtCHixvQkc7aDA6lIZC1w==; incap_ses_543_2276107=jZ3YZ36zzhJEksIaxx+JB4eM9WYAAAAAd+1HfXGRqv+kipJXxLERtw==; incap_ses_567_2276107=/x0KD6LxTgqDpZiKpmPeB/OW9WYAAAAAhjL/CHFlFbFFf1bnuuIbbA==; incap_ses_6526_2276107=aKsJc5qSkhgA2RzFkQKRWpKM9WYAAAAAfZNAUTYe7bsPv8CKQ+QGiQ==; incap_ses_84_2276107=RVHSbiFkDDfMAGqmvG0qAW6M9WYAAAAAUHx6KgbxHl+Iq8IK9dRvPg==; incap_ses_883_2276107=rkwgJ+oEqWqz30ag9wtBDEmY9WYAAAAAbGh3ogEZ/xyrP/9r2e2jNQ==; visid_incap_2276107=mJy3ij3fQ5KANzybmLJYD+b/82YAAAAAQkIPAAAAAACA2kq3AZOHTfHWowKqBecjg7Zdly1qDjbN',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'accept-language': 'en-US,en;q=0.9,be;q=0.8,ar;q=0.7',
+        'cache-control': 'no-cache',
+        'content-type': 'application/x-www-form-urlencoded',
+        'dnt': '1',
+        'origin': 'https://bizfilings.vermont.gov',
+        'pragma': 'no-cache',
+        'priority': 'u=0, i',
+        'referer': 'https://bizfilings.vermont.gov/online/DatabrokerInquire/',
+        'sec-ch-ua': '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+        'upgrade-insecure-requests': '1',
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+    }
+
+    payload = 'rbBusinessSearch=StartsWith&rbBasicSearch=BusinessName&txtDataBrokerName=&txtBusinessID=&txtFilingNumber=&ddlBusinessType=BusinessType&ddlBusinessStatus=&btnSearch=Search&hdnMessage='
+
+    try:
+        print("Sending initial request...")
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, data=payload) as response:
+                response.raise_for_status()
+                print("Initial request successful.")
+                
+                text = await response.text()
+                soup = BeautifulSoup(text, 'html.parser')
+                
+                token_element = soup.find('input', {'name': '__RequestVerificationToken', 'type': 'hidden'})
+                token = token_element['value'] if token_element else None
+                print(f"Token retrieved: {'Yes' if token else 'No'}")
+                
+                cookie = '; '.join([f"{k}={v}" for k, v in response.cookies.items() if 'incap_ses' not in k])
+
+                if not cookie:
+                    raise ValueError("No valid cookies found in the response")
+                print("Cookies retrieved successfully.")
+
+                pagination_info = soup.select_one('#pagination-digg > li.pageinfo')
+                total_pages = 1
+                if pagination_info:
+                    page_info = pagination_info.text.strip()
+                    total_pages = int(page_info.split('of')[1].split(',')[0].strip())
+
+                print(f"Total pages found: {total_pages}")
+
+        return cookie, token, total_pages
+
+    except aiohttp.ClientError as e:
+        raise RuntimeError(f"An error occurred during the initial request: {e}")
+
+async def fetch_broker_page(session, url, cookie, token, page):
+    payload = f"undefined&sortby=BusinessID&stype=a&pidx={page}"
+    headers = {
+        '__RequestVerificationToken': token,
+        'accept': '*/*',
         'accept-language': 'en-US,en;q=0.9,be;q=0.8,ar;q=0.7',
         'cache-control': 'no-cache',
         'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'origin': BASE_URL,
-        'referer': f"{BASE_URL}/online/DatabrokerInquire/DataBrokerSearch",
+        'cookie': cookie,
+        'dnt': '1',
+        'origin': 'https://bizfilings.vermont.gov',
+        'pragma': 'no-cache',
+        'priority': 'u=1, i',
+        'referer': 'https://bizfilings.vermont.gov/online/DatabrokerInquire/DataBrokerSearch',
+        'sec-ch-ua': '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-origin',
         'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
         'x-requested-with': 'XMLHttpRequest'
     }
 
-    for attempt in range(max_retries):
-        try:
-            response = rate_limited_request(SEARCH_URL, headers, payload)
-            response.raise_for_status()
-            return response.text
-        except (Timeout, RequestException) as e:
-            print(f"Error occurred (attempt {attempt + 1}/{max_retries}): {str(e)}")
-            if attempt < max_retries - 1:
-                print(f"Retrying in {retry_delay} second...")
-                time.sleep(retry_delay)
+    print(f"Fetching page {page}...")
+    async with session.post(url, headers=headers, data=payload) as response:
+        response.raise_for_status()
+        html_content = await response.text()
     
-    print("Max retries reached. Unable to fetch data.")
-    return None
+    brokers_data = parse_broker_data(html_content)
+    print(f"Processed page {page}")
+    print(f"Parsed {len(brokers_data)} brokers from the current page.")
+    return brokers_data
 
+async def fetch_all_broker_pages(cookie, token, total_pages):
+    print(f"Starting to fetch data from {total_pages} pages...")
+    url = "https://bizfilings.vermont.gov/online/DatabrokerInquire/BusinessSearchList"
+    all_brokers_data = []
 
-def parse_brokers_data(html_content):
+    async with aiohttp.ClientSession() as session:
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+        async def fetch_with_rate_limit(page):
+            async with semaphore:
+                data = await fetch_broker_page(session, url, cookie, token, page)
+                await asyncio.sleep(REQUEST_DELAY)
+                return data
+
+        tasks = [asyncio.create_task(fetch_with_rate_limit(page)) for page in range(1, total_pages + 1)]
+        results = await asyncio.gather(*tasks)
+
+        for page_data in results:
+            all_brokers_data.extend(page_data)
+            print(f"Total brokers found so far: {len(all_brokers_data)}")
+
+    print(f"Progress: 100.00%")
+    return all_brokers_data
+
+def parse_broker_data(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     table = soup.find('table', {'id': 'xhtml_grid_DBSearch'})
     if not table:
+        print("Warning: No table found in the HTML content.")
         return []
     
     rows = table.find_all('tr')[1:]
@@ -70,7 +144,7 @@ def parse_brokers_data(html_content):
             address = cells[2].text.strip()
             business_status = cells[3].text.strip()
             
-            full_detail_link = f"{BASE_URL}{detail_link}" if detail_link else ''
+            full_detail_link = f"https://bizfilings.vermont.gov{detail_link}" if detail_link else ''
             
             broker = {
                 'name': name,
@@ -83,52 +157,72 @@ def parse_brokers_data(html_content):
     
     return brokers_data
 
-def fetch_all_pages():
-    page_number = 0
-    all_brokers_data = []
-
-    while True:
-        print(f"Fetching page {page_number}...")
-        html_content = get_brokers_search_result(page_number)
-        
-        if html_content is None:
-            print(f"Failed to fetch page {page_number}. Stopping.")
-            break
-        
-        brokers_data = parse_brokers_data(html_content)
-        
-        if not brokers_data:
-            print(f"No more data found. Stopping at page {page_number}")
-            break
-        
-        all_brokers_data.extend(brokers_data)
-        print(f"Found {len(brokers_data)} brokers on page {page_number}. Total brokers so far: {len(all_brokers_data)}")
-        
-        page_number += 1
-
-    print(f"Stopped at page {page_number - 1}")
-    return all_brokers_data
-
-def save_to_csv(data, filename):
+def save_data_to_csv(data, filename):
     df = pd.DataFrame(data)
-    df.to_csv(filename, 
-              encoding="utf-8", 
-              index=False, 
-              quotechar='"', 
-              quoting=csv.QUOTE_ALL,
-              lineterminator="\n")  # Changed from line_terminator to lineterminator
+    df.to_csv(filename, encoding="utf-8", sep=',', quotechar='"', quoting=csv.QUOTE_ALL, index=False)
     print(f"Data saved to {filename}")
 
-def scrape(output_filename):
-    print("Starting to fetch all pages of broker data...")
-    all_brokers_data = fetch_all_pages()
-    print(f"Fetching complete. Total brokers found: {len(all_brokers_data)}")
-    save_to_csv(all_brokers_data, output_filename)
-    print("Data saving complete.")
+def validate_broker_data(data):
+    if not data:
+        print("Error: No data to check.")
+        return False
+
+    required_columns = ['name', 'detail_link', 'registration_id', 'address', 'business_status']
+    for column in required_columns:
+        if column not in data[0]:
+            print(f"Error: Missing required column '{column}'.")
+            return False
+
+    for row in data:
+        if not row['name'] or not isinstance(row['name'], str):
+            print(f"Error: Invalid 'name' value: {row['name']}")
+            return False
+        if not row['detail_link'].startswith('https://bizfilings.vermont.gov/'):
+            print(f"Error: Invalid 'detail_link' value: {row['detail_link']}")
+            return False
+        if not row['registration_id'] or not isinstance(row['registration_id'], str):
+            print(f"Error: Invalid 'registration_id' value: {row['registration_id']}")
+            return False
+        if not row['address'] or not isinstance(row['address'], str):
+            print(f"Error: Invalid 'address' value: {row['address']}")
+            return False
+        if not row['business_status'] or not isinstance(row['business_status'], str):
+            print(f"Error: Invalid 'business_status' value: {row['business_status']}")
+            return False
+
+    print("Data passed validation.")
+    return True
+
+async def scrape(output_filename):
+    try:
+        print("Starting the Vermont Data Broker Scraper...")
+        cookie, token, total_pages = await initialize_session()
+        print(f"Session data retrieved successfully.")
+        print(f"Cookie: {cookie[:50]}..." if len(cookie) > 50 else f"Cookie: {cookie}")
+        print(f"Token: {token[:50]}..." if token and len(token) > 50 else f"Token: {token}")
+        print(f"Total pages available: {total_pages}")
+        
+        all_brokers_data = await fetch_all_broker_pages(cookie, token, total_pages)
+        print("\nData collection completed.")
+        print(f"Total brokers found: {len(all_brokers_data)}")
+        
+        if validate_broker_data(all_brokers_data):
+            output_path = os.path.join(OUTPUT_DIRECTORY, f"{output_filename}.csv")
+            save_data_to_csv(all_brokers_data, output_path)
+            
+            print("\nSample of the first 5 brokers:")
+            for i, broker in enumerate(all_brokers_data[:5], 1):
+                print(f"\nBroker {i}:")
+                for key, value in broker.items():
+                    print(f"  {key}: {value}")
+        else:
+            print("Data failed validation. Please review the errors above.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Scrape Vermont data brokers and save to CSV.")
-    parser.add_argument("-o", "--output", default=DEFAULT_OUTPUT_FILE, help=f"Name of the output CSV file (default: {DEFAULT_OUTPUT_FILE})")
-    args = parser.parse_args()
+    output_filename = DEFAULT_OUTPUT_FILENAME
+    if len(sys.argv) > 1:
+        output_filename = sys.argv[1]
     
-    scrape(args.output)
+    asyncio.run(scrape(output_filename))
