@@ -1,7 +1,6 @@
 import requests
 # Parse the response content
 from bs4 import BeautifulSoup
-import json
 
 url = "https://bizfilings.vermont.gov/online/DatabrokerInquire/DataBrokerSearch"
 # Proxy settings
@@ -35,8 +34,9 @@ proxies = {
     'http': f'http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}',
     'https': f'http://{PROXY_USER}:{PROXY_PASS}@{PROXY_HOST}:{PROXY_PORT}'
 }
+
 try:
-    response = requests.request("POST", url, headers=headers, data=payload, proxies=proxies)
+    response = requests.request("POST", url, headers=headers, data='', proxies=proxies)
     response.raise_for_status()  # Raises a HTTPError if the status is 4xx, 5xx
     
     soup = BeautifulSoup(response.text, 'html.parser')
@@ -50,14 +50,10 @@ try:
         print(f"Request Verification Token: {token_value}")
     else:
         print("Request Verification Token not found in the response")
+    # Log cookies from the response, ignoring 'incap_ses' cookies
+    print("Cookies:")
+    cookie_string = '; '.join([f"{cookie.name}={cookie.value}" for cookie in response.cookies if 'incap_ses' not in cookie.name])
+    print(cookie_string)
 
-    # Save cookies to cookies.json, ignoring 'incap_ses' cookies
-    cookies_to_save = {cookie.name: cookie.value for cookie in response.cookies if 'incap_ses' not in cookie.name}
-    
-    with open('cookies.json', 'w') as f:
-        json.dump(cookies_to_save, f, indent=2)
-    
-    print("Cookies saved to cookies.json")
-
-except Exception as e:
+except requests.exceptions.RequestException as e:
     print(f"An error occurred: {e}")
